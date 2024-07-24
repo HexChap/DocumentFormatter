@@ -28,7 +28,7 @@ def validate_field(
 
 output_path = Path("output")
 resources_path = Path("resources")
-resources = os.listdir(resources_path)
+resources = [item for item in os.listdir(resources_path) if not item.startswith("_")]
 
 for i, res in enumerate(resources):
     print(f"{i+1}. {res}\n")
@@ -49,7 +49,7 @@ while fields:
     value = input(f"{info.description}, тип {info.annotation.__name__}: ")
 
     if not validate_field(DocFields, name, value)[1]:
-        print("Введеное значение не подходит под поле, проверьте и попробуйте снова.")
+        print("Введеное значение не подходит под поле, проверьте и попробуйте снова.\n")
         fields.insert(0, (name, info))
         continue
 
