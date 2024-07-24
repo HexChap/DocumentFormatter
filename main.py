@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 from importlib import import_module
 from typing import Any
@@ -6,7 +7,7 @@ from typing import Any
 from docxtpl import DocxTemplate
 from pydantic import BaseModel, ValidationError
 
-FIELD_FILENAME = "fields.py"
+from config import resources_path, output_path, FIELD_FILENAME
 
 
 def validate_field(
@@ -26,35 +27,63 @@ def validate_field(
         return "", True
 
 
-output_path = Path("output")
-resources_path = Path("resources")
-resources = [item for item in os.listdir(resources_path) if not item.startswith("_")]
+def user_select_res() -> str:
+    resources = [item for item in os.listdir(resources_path) if not item.startswith("_")]
+    error_msg = f"Введеное значение должно быть числом от 0 до {len(resources)}"
 
-for i, res in enumerate(resources):
-    print(f"{i+1}. {res}\n")
+    for i, res in enumerate(resources):
+        print(f"{i + 1}. {res}\n")
 
-res_i = int(input("-> Выберите шаблон: ")) - 1
-res_name = resources[res_i]
-res_path = Path(resources_path / res_name)
-res_fields_path = str(res_path / FIELD_FILENAME.removesuffix(".py")).replace(
-    os.sep, ".")
+    res_i = -1
+    while res_i == -1:
+        user_in = input("-> Выберите шаблон: ")
+        if not user_in.isdigit():
+            print(error_msg)
+            continue
 
-doc = DocxTemplate(res_path / (res_name + ".docx"))
-DocFields: BaseModel = import_module(res_fields_path).Fields
+        user_in = int(user_in) - 1
 
-fields = list(DocFields.model_fields.items())
-values = {}
-while fields:
-    name, info = fields.pop(0)
-    value = input(f"{info.description}, тип {info.annotation.__name__}: ")
+        if user_in < 0 or user_in >= len(resources):
+            print(error_msg)
+            continue
 
-    if not validate_field(DocFields, name, value)[1]:
-        print("Введеное значение не подходит под поле, проверьте и попробуйте снова.\n")
-        fields.insert(0, (name, info))
-        continue
+        res_i = user_in
 
-    values.update({name: value})
+    return resources[res_i]
 
-doc.render(values)
 
-doc.save(output_path / (res_name + ".docx"))
+def fill_resource(res_name: str):
+    res_path = Path(resources_path / res_name)
+    res_fields_path = str(
+        res_path / FIELD_FILENAME.removesuffix(".py")
+    ).replace(os.sep, ".")
+
+    doc = DocxTemplate(res_path / (res_name + ".docx"))
+    doc_fields: BaseModel = import_module(res_fields_path).Fields
+
+    fields = list(doc_fields.model_fields.items())
+    values = {}
+    while fields:
+        f_name, info = fields.pop(0)
+        value = input(f"{info.description}, тип {info.annotation.__name__}: ")
+
+        if not validate_field(doc_fields, f_name, value)[1]:
+            print("Введеное значение не подходит под поле, проверьте и попробуйте снова.\n")
+            fields.insert(0, (f_name, info))
+            continue
+
+        values.update({f_name: value})
+
+    model = doc_fields.model_validate(values)
+    doc.render(model.model_dump())
+
+    doc.save(output_path / (res_name + f"_{datetime.now().timestamp()}" + ".docx"))
+
+
+def main():
+    res_name = user_select_res()
+    fill_resource(res_name)
+
+
+if __name__ == '__main__':
+    main()

@@ -23,7 +23,7 @@ class GenderDependantFields(BaseModel):
     @computed_field
     @property
     def citizen(self) -> str:
-        return "гражданин" if self._gender == GenderEnum.male else "гражданка"
+        return "гражданин" if self.gender == GenderEnum.male else "гражданка"
 
 
 class FullnameFields(BaseModel):
