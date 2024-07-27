@@ -1,17 +1,15 @@
 import os
 from datetime import datetime
-from pathlib import Path
 from importlib import import_module
-from types import GenericAlias
-from typing import Any, TypeAlias, get_args
+from pathlib import Path
+from typing import Any
 
 from docxtpl import DocxTemplate
 from pydantic import BaseModel, ValidationError
 
-from core.base_fields import Repeated
+from core.base_bundles import Repeatable, Num2Wordable, BaseMarker
 from core.config import templates_path, output_path, FIELD_FILENAME
-
-TemplateFieldsList: TypeAlias = list[type[BaseModel] | Repeated]
+from core.tools import generate_num2words
 
 
 def validate_field(
@@ -36,7 +34,7 @@ def user_select_tmpl() -> str:
     error_msg = f"Введеное значение должно быть числом от 0 до {len(templates)}"
 
     for i, tmpl in enumerate(templates):
-        print(f"{i + 1}. {tmpl}\n")
+        print(f"{i + 1}. {tmpl}")
 
     tmpl_i = -1
     while tmpl_i == -1:
@@ -56,12 +54,18 @@ def user_select_tmpl() -> str:
     return templates[tmpl_i]
 
 
-def user_select_count_for(model: type[BaseModel], min_count: int = 0) -> int:
-    description = model.description() if hasattr(model, "description") else model.__name__
+def get_tmpl_bundles(tmpl_path: Path) -> list[type[BaseModel] | type[BaseMarker]]:
+    tmpl_fields_path = str(
+        tmpl_path / FIELD_FILENAME.removesuffix(".py")
+    ).replace(os.sep, ".")
 
+    return import_module(tmpl_fields_path).fields
+
+
+def user_select_repeat_count(marker: type[Repeatable]) -> int:
     count = -1
     while count == -1:
-        user_in = input(f"Сколько раз ввести {description}, минимум {min_count}: ")
+        user_in = input(f"Сколько раз ввести {marker.result_field_desc}, минимум {marker.min_count}: ")
         if not user_in.isdigit():
             print("Введите число.\n")
             continue
@@ -69,8 +73,8 @@ def user_select_count_for(model: type[BaseModel], min_count: int = 0) -> int:
         if user_in < 0:
             print("Число должно быть положительным.\n")
             continue
-        if user_in < min_count:
-            print(f"Минимальное число это {min_count}")
+        if user_in < marker.min_count:
+            print(f"Минимальное число это {marker.min_count}")
             continue
         if user_in > 100:
             choice = input("Вы уверенны? да/нет: ")
@@ -83,16 +87,16 @@ def user_select_count_for(model: type[BaseModel], min_count: int = 0) -> int:
     return count
 
 
-def user_fill_fields(model: type[BaseModel]) -> dict[str, str]:
+def _fill_bundle(bundle: type[BaseModel]) -> dict[str, str]:
     result = {}
 
-    fields = list(model.model_fields.items())
+    fields = list(bundle.model_fields.items())
     while fields:
         f_name, info = fields.pop(0)
         desc = info.description if info.description else f_name
         value = input(f"{desc}: ")
 
-        if not validate_field(model, f_name, value)[1]:
+        if not validate_field(bundle, f_name, value)[1]:
             print("Введеное значение не подходит под поле, проверьте и попробуйте снова.\n")
             fields.insert(0, (f_name, info))
             continue
@@ -102,56 +106,51 @@ def user_fill_fields(model: type[BaseModel]) -> dict[str, str]:
     return result
 
 
-def get_tmpl_fields(tmpl_path: Path) -> TemplateFieldsList:
-    tmpl_fields_path = str(
-        tmpl_path / FIELD_FILENAME.removesuffix(".py")
-    ).replace(os.sep, ".")
+def fill_repeated_bundle(marker: type[Repeatable], repeat_count: int) -> dict[str, list[str]]:
+    result = []
+    for i in range(repeat_count):
+        values = _fill_bundle(marker.model)
+        fields = marker.model.model_validate(values).model_dump()
 
-    return import_module(tmpl_fields_path).fields
+        result.append(
+            fields.get(marker.repeat_field_name)
+        )
+
+    return {marker.result_field_name: result}
 
 
-def process_tmpl_fields(
-    fields_to_process: list[type[BaseModel]],
-    repeated_fields: list[tuple[Repeated, int]]
-):
-    result: dict[str, str | list[str]] = {}
-    for fields_model in fields_to_process:
-        result.update(user_fill_fields(fields_model))
-
-    for repeated, count in repeated_fields:
-        fields_model = repeated.model
-        filled = []
-        for i in range(count):
-            values = user_fill_fields(fields_model)
-            validated = fields_model.model_validate(values)
-            filled.append(validated.model_dump().get(repeated.repeat_field_name))
-
-        result.update({repeated.result_field_name: filled})
+def fill_num2word_bundle(marker: type[Num2Wordable]) -> dict[str, str]:
+    result = _fill_bundle(marker.model)
+    result.update(
+        generate_num2words(payload=result, fields=marker.num2words_fields)
+    )
 
     return result
 
 
-def fill_template(tmpl_name: str):
+# noinspection PyTypeChecker
+def fill_bundle(bundle: type[BaseModel] | type[BaseMarker]) -> dict[str, str | list[str]]:
+    match bundle:
+        case Repeatable():
+            count = user_select_repeat_count(bundle)
+            return fill_repeated_bundle(bundle, count)
+
+        case Num2Wordable():
+            return fill_num2word_bundle(bundle)
+
+        case _:
+            return _fill_bundle(bundle)
+
+
+def process_template(tmpl_name: str):
+    result: dict[str, str | list[str]] = {}
     tmpl_path = Path(templates_path / tmpl_name)
 
     doc = DocxTemplate(tmpl_path / (tmpl_name + ".docx"))
-    tmpl_fields = get_tmpl_fields(tmpl_path)
+    tmpl_bundles = get_tmpl_bundles(tmpl_path)
 
-    expected_field_names = []
-    fields_to_process: list[type[BaseModel]] = []
-    repeated_fields: list[tuple[Repeated, int]] = []
-    for fields in tmpl_fields:
-        if isinstance(fields, Repeated):  # check if Repeated
-            fields_model = fields.model
-            count = user_select_count_for(fields_model, min_count=fields.min_count)
-            repeated_fields.append((fields, count))
-            expected_field_names.append(fields.result_field_name)
-        else:
-            fields_to_process.append(fields)
-            expected_field_names.extend(fields.model_fields.keys())
-
-    result = process_tmpl_fields(fields_to_process, repeated_fields)
-    result = {k: v for k, v in result.items() if k in expected_field_names}  # omit
+    for bundle in tmpl_bundles:
+        result.update(fill_bundle(bundle))
 
     doc.render(result)
     doc.save(output_path / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx"))
@@ -159,7 +158,7 @@ def fill_template(tmpl_name: str):
 
 def main():
     tmpl_name = user_select_tmpl()
-    fill_template(tmpl_name)
+    process_template(tmpl_name)
 
 
 if __name__ == '__main__':
