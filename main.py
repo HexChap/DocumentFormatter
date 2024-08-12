@@ -1,15 +1,19 @@
 import os
+import sys
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from docx.document import Document
 from docxtpl import DocxTemplate
 from pydantic import BaseModel, ValidationError
 
 from core.base_bundles import Repeatable, Num2Wordable, BaseMarker
 from core.config import templates_path, output_path, FIELD_FILENAME
 from core.tools import generate_num2words
+
+FROZEN = getattr(sys, "frozen", False)
 
 
 def validate_field(
@@ -30,7 +34,7 @@ def validate_field(
 
 
 def user_select_tmpl() -> str:
-    templates = [item for item in os.listdir(templates_path) if not item.startswith("_")]
+    templates = [item for item in os.listdir(templates_path) if not FROZEN or not item.startswith("_")]
     error_msg = f"Введеное значение должно быть числом от 0 до {len(templates)}"
 
     for i, tmpl in enumerate(templates):
@@ -87,6 +91,14 @@ def user_select_repeat_count(marker: type[Repeatable]) -> int:
     return count
 
 
+def _clean_docx(docx: Document):
+    for p in docx.paragraphs:
+        tab_stops = p.paragraph_format.tab_stops
+
+        for i in range(len(tab_stops)):
+            del tab_stops[i]
+
+
 def _fill_bundle(bundle: type[BaseModel]) -> dict[str, str]:
     result = {}
 
@@ -94,8 +106,9 @@ def _fill_bundle(bundle: type[BaseModel]) -> dict[str, str]:
     while fields:
         f_name, info = fields.pop(0)
         desc = info.description if info.description else f_name
-        value = input(f"{desc}: ")
+        exmpl = f" (напр. {info.examples[0]})" if info.examples else ""
 
+        value = input(f"{desc}{exmpl}: ")
         if not validate_field(bundle, f_name, value)[1]:
             print("Введеное значение не подходит под поле, проверьте и попробуйте снова.\n")
             fields.insert(0, (f_name, info))
@@ -142,7 +155,7 @@ def fill_bundle(bundle: type[BaseModel] | type[BaseMarker]) -> dict[str, str | l
             return _fill_bundle(bundle)
 
 
-def process_template(tmpl_name: str):
+def process_template(tmpl_name: str) -> Path:
     result: dict[str, str | list[str]] = {}
     tmpl_path = Path(templates_path / tmpl_name)
 
@@ -152,8 +165,13 @@ def process_template(tmpl_name: str):
     for bundle in tmpl_bundles:
         result.update(fill_bundle(bundle))
 
+    result_path = output_path / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx")
     doc.render(result)
-    doc.save(output_path / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx"))
+
+    _clean_docx(doc.docx)
+    doc.save(result_path)
+
+    return result_path
 
 
 def main():

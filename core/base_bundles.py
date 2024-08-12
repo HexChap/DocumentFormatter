@@ -8,7 +8,9 @@ from core.tools import GenderEnum, Numeric
 DATE_PATTERN = r"^([0-9]{1,2})\.([0-9]{1,2})\.([1-2][0-9]{3})$"
 ISSUED_BY_CODE_PATTERN = r"^[0-9]{3}-[0-9]{3}$"
 
-DateField = Annotated[str, Field(pattern=DATE_PATTERN)]
+DATE_EXAMPLE = "12.08.2024"
+
+DateField = Annotated[str, Field(pattern=DATE_PATTERN, examples=[DATE_EXAMPLE])]
 
 
 class BaseMarker(BaseModel):
@@ -75,17 +77,18 @@ class NamesBundle(BaseModel):
 
 
 class BirthBundle(BaseModel):
-    birth_date: DateField = Field(description="Дата рождения в в формате xx.xx.xxxx")
+    birth_date: DateField = Field(description="Дата рождения")
     birth_location: str = Field(description="Место рождения")
 
 
 class PassportBundle(BaseModel):
     passport_no: str = Field(description="Номер (№) пасспорта")
-    passport_issued_date: DateField = Field(description="Дата выдачи пасспорта в формате xx.xx.xxxx")
+    passport_issued_date: DateField = Field(description="Дата выдачи пасспорта")
     passport_issued_by_name: str = Field(description="Полное название отделения, без кода")
     passport_issued_by_code: str = Field(
         pattern=ISSUED_BY_CODE_PATTERN,
-        description="Код подразделения, в формате xxx-xxx"
+        description="Код подразделения",
+        examples=["500-127"]
     )
 
 
@@ -104,11 +107,11 @@ class RusCitizenInfoBundle(
 
 
 class ObjectInfoBundle(BaseModel):
-    apart_no: int
-    object_id: str
-    object_address: str
-    area: Numeric
-    area_adjacent: Numeric
+    apart_no: int = Field(description="Номер апартамента")
+    object_id: str = Field(description="Идентификатор объекта")
+    object_address: str = Field(description="Адресс объекта")
+    area: Numeric = Field(description="Площадь объекта")
+    area_adjacent: Numeric = Field(description="Прилежащие части")
 
 
 RepeatableRusCitizenInfoBundle = Repeatable(
