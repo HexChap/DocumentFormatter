@@ -1,19 +1,28 @@
+import asyncio
 import os
-import sys
 from datetime import datetime
-from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from aiohttp import ClientConnectionError
 from docx.document import Document
 from docxtpl import DocxTemplate
-from pydantic import BaseModel, ValidationError
+from gh_auto_updater import update
+from loguru import logger
+from pydantic import BaseModel
+from pydantic import ValidationError
 
 from core.base_bundles import Repeatable, Num2Wordable, BaseMarker
-from core.config import templates_path, output_path, FIELD_FILENAME
+from core.config import TEMPLATES_PATH, OUTPUT_PATH, FIELD_FILENAME, FROZEN
 from core.tools import generate_num2words
 
-FROZEN = getattr(sys, "frozen", False)
+# logger.configure(handlers=[{"sink": sys.stdout, "level": "ERROR"}])
+
+LAST_UPDATE_DATE_PATH = ".ghlastupdate"
+if FROZEN:
+    LAST_UPDATE_DATE_PATH = Path.cwd() / "_internal" / LAST_UPDATE_DATE_PATH
+
+__version__ = "v1.0.1"
 
 
 def validate_field(
@@ -34,8 +43,8 @@ def validate_field(
 
 
 def user_select_tmpl() -> str:
-    templates = [item for item in os.listdir(templates_path) if not FROZEN or not item.startswith("_")]
-    error_msg = f"Введеное значение должно быть числом от 0 до {len(templates)}"
+    templates = [item for item in os.listdir(TEMPLATES_PATH) if not FROZEN or not item.startswith("_")]
+    error_msg = f"Введеное значение должно быть числом от 1 до {len(templates)}"
 
     for i, tmpl in enumerate(templates):
         print(f"{i + 1}. {tmpl}")
@@ -58,12 +67,24 @@ def user_select_tmpl() -> str:
     return templates[tmpl_i]
 
 
+# noinspection PyUnresolvedReferences
 def get_tmpl_bundles(tmpl_path: Path) -> list[type[BaseModel] | type[BaseMarker]]:
-    tmpl_fields_path = str(
-        tmpl_path / FIELD_FILENAME.removesuffix(".py")
-    ).replace(os.sep, ".")
+    from core import base_bundles
+    from pydantic import BaseModel, Field
 
-    return import_module(tmpl_fields_path).fields
+    with open(tmpl_path / FIELD_FILENAME, "r", encoding="utf-8") as fp:
+        code = fp.read()
+
+    variables = globals()
+    variables.update(locals())
+
+    exec(code, variables)
+
+    fields: Any | None = variables.get("fields", None)
+    if not fields:
+        raise ValueError("Template does not have fields list variable.")
+
+    return fields
 
 
 def user_select_repeat_count(marker: type[Repeatable]) -> int:
@@ -157,7 +178,8 @@ def fill_bundle(bundle: type[BaseModel] | type[BaseMarker]) -> dict[str, str | l
 
 def process_template(tmpl_name: str) -> Path:
     result: dict[str, str | list[str]] = {}
-    tmpl_path = Path(templates_path / tmpl_name)
+    tmpl_path = Path(TEMPLATES_PATH / tmpl_name)
+    tmpl_name = tmpl_name.removeprefix("_")
 
     doc = DocxTemplate(tmpl_path / (tmpl_name + ".docx"))
     tmpl_bundles = get_tmpl_bundles(tmpl_path)
@@ -165,19 +187,34 @@ def process_template(tmpl_name: str) -> Path:
     for bundle in tmpl_bundles:
         result.update(fill_bundle(bundle))
 
-    result_path = output_path / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx")
+    OUTPUT_PATH.mkdir(exist_ok=True, parents=True)
+
+    result_path = OUTPUT_PATH / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx")
     doc.render(result)
 
-    _clean_docx(doc.docx)
+    # _clean_docx(doc.docx)
     doc.save(result_path)
 
     return result_path
 
 
-def main():
+async def main():
+    try:
+        await update(
+            repository_name="HexChap/DocumentFormatter",
+            current_version=__version__,
+            install_dir=Path.cwd() / "temp",
+            updates_rate_limit_secs=60 * 60,
+            last_update_date_path=LAST_UPDATE_DATE_PATH,
+            allow_plain=True
+        )
+    except ClientConnectionError:
+        logger.info("No internet connection. Abort update")
+
     tmpl_name = user_select_tmpl()
     process_template(tmpl_name)
 
 
 if __name__ == '__main__':
-    main()
+    # print(get_tmpl_bundles(Path(r"D:\.Development\.Projects\HA.Estate\DocumentFormatter\templates\Доверенность")))
+    asyncio.run(main())
