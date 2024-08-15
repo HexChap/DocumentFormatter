@@ -203,7 +203,7 @@ async def main():
         await update(
             repository_name="HexChap/DocumentFormatter",
             current_version=__version__,
-            install_dir=Path.cwd() / "temp",
+            install_dir=Path.cwd(),
             updates_rate_limit_secs=60 * 60,
             last_update_date_path=LAST_UPDATE_DATE_PATH,
             allow_plain=True
