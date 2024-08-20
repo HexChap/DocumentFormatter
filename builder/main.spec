@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ("../.ghlastupdate", "."),
+        # ("../.ghlastupdate", "."),
         ("../templates", "templates/")
     ],
     hiddenimports=[],

@@ -1,5 +1,6 @@
 import asyncio
 import os
+from _socket import gaierror
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,9 @@ from core.base_bundles import Repeatable, Num2Wordable, BaseMarker
 from core.config import TEMPLATES_PATH, OUTPUT_PATH, FIELD_FILENAME, FROZEN
 from core.tools import generate_num2words
 
-# logger.configure(handlers=[{"sink": sys.stdout, "level": "ERROR"}])
-
-LAST_UPDATE_DATE_PATH = ".ghlastupdate"
+LAST_CHECK_DATE_PATH = ".ghlastupdate"
 if FROZEN:
-    LAST_UPDATE_DATE_PATH = Path.cwd() / "_internal" / LAST_UPDATE_DATE_PATH
+    LAST_CHECK_DATE_PATH = Path.cwd() / "_internal" / LAST_CHECK_DATE_PATH
 
 __version__ = "v1.0.1"
 
@@ -204,8 +203,8 @@ async def main():
             repository_name="HexChap/DocumentFormatter",
             current_version=__version__,
             install_dir=Path.cwd(),
-            updates_rate_limit_secs=60 * 60,
-            last_update_date_path=LAST_UPDATE_DATE_PATH,
+            checks_rate_limit_secs=60 * 60,
+            last_check_date_path=LAST_CHECK_DATE_PATH,
             allow_plain=True
         )
     except ClientConnectionError:
