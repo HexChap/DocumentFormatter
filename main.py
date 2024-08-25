@@ -24,7 +24,7 @@ LAST_CHECK_DATE_PATH = ".ghlastupdate"
 if FROZEN:
     LAST_CHECK_DATE_PATH = Path.cwd() / "_internal" / LAST_CHECK_DATE_PATH
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 
 def validate_field[T](
@@ -236,6 +236,7 @@ def process_template(tmpl_path: Path) -> Path:
 
 
 async def main():
+    logger.info(f"DocumentFormatter - {__version__}")
     try:
         await update(
             repository_name="HexChap/DocumentFormatter",
