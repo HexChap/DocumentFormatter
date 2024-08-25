@@ -1,51 +1,78 @@
 import asyncio
 import os
-from _socket import gaierror
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from types import NoneType, new_class, UnionType
+from typing import get_args, get_origin
 
 from aiohttp import ClientConnectionError
 from docx.document import Document
 from docxtpl import DocxTemplate
 from gh_auto_updater import update
 from loguru import logger
-from pydantic import BaseModel
-from pydantic import ValidationError
+from polyfactory.factories.pydantic_factory import ModelFactory
+from pydantic import BaseModel, ValidationError, Field
+from pydantic_core import PydanticUndefined, SchemaValidator
 
-from core.base_bundles import Repeatable, Num2Wordable, BaseMarker
-from core.config import TEMPLATES_PATH, OUTPUT_PATH, FIELD_FILENAME, FROZEN
-from core.tools import generate_num2words
+from core import common_bundles, features, common_fields
+from core.common_bundles import BgResidentBundle
+from core.common_bundles.base import BaseBundle
+from core.config import TEMPLATES_PATH, OUTPUT_PATH, BUNDLES_FILENAME, FROZEN, AUTO_FILL
+
 
 LAST_CHECK_DATE_PATH = ".ghlastupdate"
 if FROZEN:
     LAST_CHECK_DATE_PATH = Path.cwd() / "_internal" / LAST_CHECK_DATE_PATH
 
-__version__ = "v1.0.1"
+__version__ = "2.0.0"
 
 
-def validate_field(
+def validate_field[T](
     model: type[BaseModel],
     field_name: str,
-    value: Any
-) -> tuple[str, bool]:
+    value: T
+) -> tuple[T | str, bool]:
     try:
-        model.__pydantic_validator__.validate_assignment(
-            model.model_construct(),
-            field_name,
-            value
-        )
+        # noinspection PyTypeChecker
+        field_validator = SchemaValidator(model.__pydantic_core_schema__["schema"]["fields"][field_name]["schema"])
+        value = field_validator.validate_python(value)
     except ValidationError as e:
         return e, False
     else:
-        return "", True
+        return value, True
 
 
-def user_select_tmpl() -> str:
-    templates = [item for item in os.listdir(TEMPLATES_PATH) if not FROZEN or not item.startswith("_")]
-    error_msg = f"Введеное значение должно быть числом от 1 до {len(templates)}"
+def get_template_path(template_dir_path) -> Path:
+    tmpl_path = TEMPLATES_PATH / template_dir_path
+    templates = [
+        filename
+        for filename in os.listdir(tmpl_path)
+        if filename.endswith(".docx") and not filename.startswith("~$")
+    ]
 
-    for i, tmpl in enumerate(templates):
+    error_msg = None
+    if len(templates) > 1:
+        error_msg = "Multiple templates in one directory are not allowed"
+    elif len(templates) < 1:
+        error_msg = "No template was found in the chosen directory."
+
+    if error_msg:
+        logger.critical(error_msg)
+        raise ValueError(error_msg)
+
+    return tmpl_path / templates[0]
+
+
+def user_select_tmpl() -> Path:
+    """
+
+    Returns:
+        str: A pathlib.Path to the template chosen by user
+    """
+    template_dirs = [item for item in os.listdir(TEMPLATES_PATH) if not FROZEN or not item.startswith("_")]
+    error_msg = f"Введеное значение должно быть числом от 1 до {len(template_dirs)}"
+
+    for i, tmpl in enumerate(template_dirs):
         print(f"{i + 1}. {tmpl}")
 
     tmpl_i = -1
@@ -57,39 +84,45 @@ def user_select_tmpl() -> str:
 
         user_in = int(user_in) - 1
 
-        if user_in < 0 or user_in >= len(templates):
+        if user_in < 0 or user_in >= len(template_dirs):
             print(error_msg)
             continue
 
         tmpl_i = user_in
 
-    return templates[tmpl_i]
+    return get_template_path(template_dirs[tmpl_i])
 
 
-# noinspection PyUnresolvedReferences
-def get_tmpl_bundles(tmpl_path: Path) -> list[type[BaseModel] | type[BaseMarker]]:
-    from core import base_bundles
-    from pydantic import BaseModel, Field
+def get_tmpl_bundles(tmpl_path: Path) -> list[type[BaseModel]]:
+    env = {
+        "features": features,
+        "common_bundles": common_bundles,
+        "common_fields": common_fields,
+        "BaseBundle": BaseBundle,
+        "Field": Field,
+        **locals()
+    }
 
-    with open(tmpl_path / FIELD_FILENAME, "r", encoding="utf-8") as fp:
+    with open(tmpl_path / BUNDLES_FILENAME, "r", encoding="utf-8") as fp:
         code = fp.read()
 
-    variables = globals()
-    variables.update(locals())
+    try:
+        exec(code, env)  # it will execute the code and put all the new variables in the env dict
+    except Exception as e:
+        logger.critical(f"Unprocessable bundles file for template {tmpl_path}")
+        raise ValueError(f"Something went wrong in the bundles.py for template in {tmpl_path}") from e
 
-    exec(code, variables)
+    bundles: list[type[BaseModel]] | None = env.get("bundles", None)
+    if not bundles:
+        raise ValueError("Template does not have bundles list variable.")
 
-    fields: Any | None = variables.get("fields", None)
-    if not fields:
-        raise ValueError("Template does not have fields list variable.")
-
-    return fields
+    return bundles
 
 
-def user_select_repeat_count(marker: type[Repeatable]) -> int:
+def user_select_repeat_count(desc: str) -> int:
     count = -1
     while count == -1:
-        user_in = input(f"Сколько раз ввести {marker.result_field_desc}, минимум {marker.min_count}: ")
+        user_in = input(f"Сколько раз ввести {desc}?: ")
         if not user_in.isdigit():
             print("Введите число.\n")
             continue
@@ -97,9 +130,9 @@ def user_select_repeat_count(marker: type[Repeatable]) -> int:
         if user_in < 0:
             print("Число должно быть положительным.\n")
             continue
-        if user_in < marker.min_count:
-            print(f"Минимальное число это {marker.min_count}")
-            continue
+        # if user_in < bundle.min_count:
+        #     print(f"Минимальное число это {bundle.min_count}")
+        #     continue
         if user_in > 100:
             choice = input("Вы уверенны? да/нет: ")
             if choice == "нет":
@@ -119,78 +152,83 @@ def _clean_docx(docx: Document):
             del tab_stops[i]
 
 
-def _fill_bundle(bundle: type[BaseModel]) -> dict[str, str]:
+def _fill_bundle[T: BaseModel](bundle: type[T]) -> T:
     result = {}
+
+    if AUTO_FILL:
+        factory = new_class(
+            bundle.__name__ + "Factory",
+            (ModelFactory[bundle],),
+            {}
+        )
+        # noinspection PyUnresolvedReferences
+        return factory.build()
 
     fields = list(bundle.model_fields.items())
     while fields:
         f_name, info = fields.pop(0)
+        annotation = info.annotation
+
+        if get_origin(annotation) != UnionType and issubclass(annotation, BaseBundle):
+            result.update({f_name: _fill_bundle(info.annotation)})
+            continue
+
         desc = info.description if info.description else f_name
         exmpl = f" (напр. {info.examples[0]})" if info.examples else ""
+        default = f" (по умол. {info.default})" if info.default != PydanticUndefined else ""
+        is_req = "*" if NoneType not in get_args(annotation) else ""
 
-        value = input(f"{desc}{exmpl}: ")
-        if not validate_field(bundle, f_name, value)[1]:
+        value = input(f"{is_req}{desc}{exmpl}{default}: ")
+
+        if value == "":
+            value = info.default if default else None
+
+        value, success = validate_field(bundle, f_name, value)
+        if not success:
             print("Введеное значение не подходит под поле, проверьте и попробуйте снова.\n")
             fields.insert(0, (f_name, info))
             continue
 
         result.update({f_name: value})
 
-    return result
+    return bundle.model_construct(**result)
 
 
-def fill_repeated_bundle(marker: type[Repeatable], repeat_count: int) -> dict[str, list[str]]:
+def fill_repeatable(bundle: type[BaseModel], repeat_count: int) -> dict[str, list[BaseModel]]:
     result = []
     for i in range(repeat_count):
-        values = _fill_bundle(marker.model)
-        fields = marker.model.model_validate(values).model_dump()
+        result.append(_fill_bundle(bundle))
 
-        result.append(
-            fields.get(marker.repeat_field_name)
-        )
-
-    return {marker.result_field_name: result}
-
-
-def fill_num2word_bundle(marker: type[Num2Wordable]) -> dict[str, str]:
-    result = _fill_bundle(marker.model)
-    result.update(
-        generate_num2words(payload=result, fields=marker.num2words_fields)
-    )
-
-    return result
+    return {bundle.result_var_name: result}
 
 
 # noinspection PyTypeChecker
-def fill_bundle(bundle: type[BaseModel] | type[BaseMarker]) -> dict[str, str | list[str]]:
-    match bundle:
-        case Repeatable():
-            count = user_select_repeat_count(bundle)
-            return fill_repeated_bundle(bundle, count)
+def fill_bundle[T: BaseModel](bundle: type[T]) -> T | dict[str, T]:
+    result = None
 
-        case Num2Wordable():
-            return fill_num2word_bundle(bundle)
+    if issubclass(bundle, features.repeatable.RepeatableBundle):
+        count = user_select_repeat_count(bundle.bundle_desc)
+        result = fill_repeatable(bundle, count)
 
-        case _:
-            return _fill_bundle(bundle)
+    return result or _fill_bundle(bundle).model_dump()
 
 
-def process_template(tmpl_name: str) -> Path:
+def process_template(tmpl_path: Path) -> Path:
     result: dict[str, str | list[str]] = {}
-    tmpl_path = Path(TEMPLATES_PATH / tmpl_name)
-    tmpl_name = tmpl_name.removeprefix("_")
+    tmpl_path = tmpl_path.parent
+    tmpl_name = tmpl_path.name.removeprefix("_")
+    result_path = OUTPUT_PATH / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx")
 
     doc = DocxTemplate(tmpl_path / (tmpl_name + ".docx"))
     tmpl_bundles = get_tmpl_bundles(tmpl_path)
 
+    print("[!] Поля, помеченные звездочкой, обязательны к заполнению.")
     for bundle in tmpl_bundles:
         result.update(fill_bundle(bundle))
 
     OUTPUT_PATH.mkdir(exist_ok=True, parents=True)
 
-    result_path = OUTPUT_PATH / (tmpl_name + f"_{datetime.now().timestamp()}" + ".docx")
     doc.render(result)
-
     # _clean_docx(doc.docx)
     doc.save(result_path)
 

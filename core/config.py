@@ -2,7 +2,8 @@ import sys
 from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
-FIELD_FILENAME = "fields.py"
+AUTO_FILL = False
+BUNDLES_FILENAME = "bundles.py"
 
 INTERNAL = Path("_internal")
 OUTPUT_PATH = Path("output")
